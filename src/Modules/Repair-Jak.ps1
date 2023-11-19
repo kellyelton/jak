@@ -1,6 +1,7 @@
 function Repair-Jak {
     param (
-        [string]$Name
+        [string]$Name,
+        [string]$Instructions
     )
 
     $USER_DATA_PATH = "~\.jak"
@@ -35,7 +36,7 @@ function Repair-Jak {
     }
 
     # Run the fixer upper file
-    & $FIX_APP_PATH
+    & $FIX_APP_PATH $Instructions
 }
 
 #if ($PSCommandPath -eq $MyInvocation.MyCommand.Path) {

@@ -82,7 +82,7 @@ $prompt | Out-File -FilePath $path -NoNewline | Out-Null
 $headers = @{ 
     Authorization="Bearer $bearer";
     "Content-Type"="application/json";
-    "User-Agent"="Jak/0.1";
+    "User-Agent"="Jak/0.2";
 }
 
 while ($true)

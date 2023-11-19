@@ -11,6 +11,11 @@ function New-Jak {
     #$details = "Fullscreen 3d hello world"
     #$Force = $true
 
+    $API_BASE = "https://api.openai.com/v1/chat/completions"
+    #$API_BASE = "http://localhost:1234/v1/chat/completions"
+    $API_KEY = "sk-1234567890abcdef1234567890abcdef"
+    $AI_MODEL = "gpt-4-1106-preview"
+
     $languageext = ""
     $languageexe = ""
     if ($language -eq "python" -or $language -eq "py" -or $language -eq "python3" -or $language -eq "py3") {
@@ -39,6 +44,7 @@ function New-Jak {
     $TEMPLATES_ROOT = Resolve-Path "$USER_DATA_PATH\templates"
 
     $TEMPLATE__NEW = "$TEMPLATES_ROOT\new.txt"
+    $TEMPLATE__NEW_INSTRUCTION = "$TEMPLATES_ROOT\new_instruction.txt"
 
     # if name is not provided, set to HelloWorld
     if ($null -eq $name) {
@@ -59,6 +65,7 @@ function New-Jak {
         Write-Host "Apps root: $APPS_ROOT"
         Write-Host "Templates root: $TEMPLATES_ROOT"
         Write-Host "Template new: $TEMPLATE__NEW"
+        Write-Host "Template new instruction: $TEMPLATE__NEW_INSTRUCTION"
         Write-Host "App root: $APP_ROOT"
         Write-Host "Debug root: $DEBUG_ROOT"
         Write-Host "Language: $language"
@@ -114,7 +121,8 @@ function New-Jak {
     }
 
     # read template file
-    [string]$prompt_template = [system.io.file]::ReadAllText($TEMPLATE__NEW).TrimEnd()
+    [string]$prompt_template = [system.io.file]::ReadAllText($TEMPLATE__NEW)
+    [string]$instruction_template = [system.io.file]::ReadAllText($TEMPLATE__NEW_INSTRUCTION)
 
     # replace the text [PROMPT] with the prompt 
     $prompt = $prompt_template -replace "\[PROMPT\]", $details
@@ -122,9 +130,15 @@ function New-Jak {
     $prompt = $prompt -replace "\[APPLANGUAGE\]", $language
     $prompt = $prompt -replace "\[APPEXTENSION\]", $languageext
 
+    $instructions = $instruction_template -replace "\[PROMPT\]", $details
+    $instructions = $instructions -replace "\[APPNAME\]", $name
+    $instructions = $instructions -replace "\[APPLANGUAGE\]", $language
+    $instructions = $instructions -replace "\[APPEXTENSION\]", $languageext
+
     if ($Debug) {
         # Write request details to request.txt
         $prompt | Out-File -FilePath "$DEBUG_ROOT\prompt.txt" | Out-Null
+        $instruction_template | Out-File -FilePath "$DEBUG_ROOT\instruction.txt" | Out-Null
     }
 
     # write script file
@@ -137,33 +151,51 @@ function New-Jak {
     $headers = @{ 
         Authorization  = "Bearer $bearer";
         "Content-Type" = "application/json";
-        "User-Agent"   = "Jak/0.1";
+        "User-Agent"   = "Jak/0.2";
     }
 
     function Generate-Code() {
         param (
             [string]$path,
+            [string]$instructions,
+            [string]$model,
             $headers
         )
+
+        if (-not (Test-Path $path)) {
+            Write-Error "Prompt file does not exist: $path"
+            return $false
+        }
+
+        if (-not $instructions) {
+            Write-Warning "Instructions are empty"
+        }
 
         for ($i = 0; $i -lt 5; $i++) {
             # Update progress bar
             Write-Progress -Activity "Initializing..." -Status "Iteration $i" -PercentComplete ($i * 20)
+            
+            $body_text = [system.io.file]::ReadAllText($path)
 
-            $body_text = [system.io.file]::ReadAllText($path).TrimEnd()
-            #$body_text = "int mai"
             $body = @{ 
                 "temperature"       = 0.0; # this value represents the randomness of the model. 0 means the model will always choose the most likely word
                 "max_tokens"        = 400;
                 "top_p"             = 1;
                 "frequency_penalty" = 0.4; # this value means the model will try to avoid repeating the same words
                 "presence_penalty"  = 0.0; # this value represents the probability of the model repeating the same text
-                "best_of"           = 3;
                 "stream"            = $false;
-                "prompt"            = $body_text;
-                "logprobs"          = 0;
-                "echo"              = $false;
+                "model"             = $model;
                 "stop"              = "@' DONE '@";
+                "messages"          = @(
+                    @{
+                        "role" = "system";
+                        "content"= $instructions;
+                    },
+                    @{
+                        "role" = "user";
+                        "content"= $body_text;
+                    }
+                );
             } | ConvertTo-Json 
 
             if ($Debug) {
@@ -173,7 +205,7 @@ function New-Jak {
 
             # send request
             # use proxy at localhost:8888
-            $url = "https://api.openai.com/v1/engines/code-davinci-002/completions"
+            $url = $API_BASE
             $response = Invoke-RestMethod -Method Post -Uri $url -Headers $headers -Body $body -ContentType "application/json" -StatusCodeVariable "status_code"
     
             if ($Debug) {
@@ -189,7 +221,21 @@ function New-Jak {
                 return $false
             }
 
-            $choice_text = $choice | Select-Object -ExpandProperty text
+            $message = $choice | Select-Object -ExpandProperty message
+
+            if ($null -eq $message) {
+                Write-Host "No message found"
+                return $false
+            }
+
+            $content = $message | Select-Object -ExpandProperty content
+
+            if ($null -eq $content) {
+                Write-Host "No content found"
+                return $false
+            }
+
+            $choice_text = $content
 
             # if choice_text ends with a "@, move it to the next line
             $choice_text = $choice_text -replace "`"@$", "`r`n`"@"
@@ -204,13 +250,15 @@ function New-Jak {
     }
 
     while ($true) {
-        $completed = Generate-Code -path $path -headers $headers
+        $completed = Generate-Code -path $path -headers $headers -instructions $instructions -model $AI_MODEL
 
         if ($completed) {
             write-host "Code generation completed."
             Write-Host
             break
         }
+
+        ##TODO: Run through AI again and ask it to make sure the code is complete.
 
         Write-Host "Failed to generate code!"
         write-Host " - $path"
